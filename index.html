@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>影片逐幀擷取器｜Video Frame Extractor</title>
+  <meta name="description" content="把上傳的影片逐幀轉成圖片並打包成 ZIP，純前端，適合 GitHub Pages。" />
+  <style>
+    :root{--bg:#0b1020;--card:#131a33;--ink:#e8edff;--muted:#b8c2ea;--brand:#7aa2ff;--accent:#75f7c4;}
+    *{box-sizing:border-box}body{margin:0;font-family:system-ui,-apple-system,"Noto Sans TC",Segoe UI,Roboto; background:linear-gradient(180deg,#0b1020,#0f1630 60%,#0b1020); color:var(--ink)}
+    header{padding:28px 20px 10px;text-align:center}
+    h1{margin:0 0 8px;font-size:clamp(22px,4vw,32px)}
+    .sub{color:var(--muted)}
+    .wrap{max-width:980px;margin:0 auto;padding:16px}
+    .card{background:var(--card);border:1px solid #2b355f; border-radius:18px; padding:18px; box-shadow:0 10px 30px rgba(0,0,0,.25)}
+    .grid{display:grid; gap:16px; grid-template-columns:1fr}
+    .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+    label{font-weight:600;margin-right:8px}
+    input[type="number"], select{background:#0e1430;border:1px solid #38406a;color:var(--ink);border-radius:10px;padding:8px 10px;min-width:100px}
+    input[type="file"]{accent-color:var(--brand)}
+    .drop{border:2px dashed #4050a8;border-radius:16px;padding:22px;text-align:center; color:var(--muted);transition:.2s}
+    .drop.drag{background:#0f1a44;color:var(--ink);border-color:var(--accent)}
+    button{background:linear-gradient(180deg,#7aa2ff,#5b86ff);color:#0b1020;border:0;border-radius:12px;padding:10px 16px;font-weight:800;cursor:pointer}
+    button:disabled{opacity:.5;cursor:not-allowed}
+    progress{width:100%; height:14px}
+    .mono{font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace}
+    .hint{color:var(--muted);font-size:.95em}
+    footer{opacity:.7;text-align:center;padding:22px}
+    .mini{font-size:.9em}
+    .thumbs{display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:10px; max-height:36vh; overflow:auto; padding-top:6px}
+    .thumbs img{width:100%; border-radius:10px; border:1px solid #293160}
+    .badge{display:inline-block;background:#0c1942;border:1px solid #32407a;color:#a6b9ff;padding:3px 8px;border-radius:999px;font-size:.85em}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>影片逐幀擷取器</h1>
+    <div class="sub">純前端在瀏覽器處理，不用伺服器。丟到 GitHub Pages 就能用。</div>
+  </header>
+  <main class="wrap">
+    <section class="card grid">
+      <div class="row">
+        <label for="videoFile">選擇影片</label>
+        <input id="videoFile" type="file" accept="video/*" />
+        <span class="badge" id="info">未載入</span>
+      </div>
+
+      <div id="dropzone" class="drop">或把影片拖進來（支援 MP4、WebM、MOV 等瀏覽器可解碼格式）</div>
+
+      <div class="row">
+        <label for="fps">輸出 FPS</label>
+        <input id="fps" type="number" min="1" max="60" step="1" value="5" />
+        <span class="hint">擷取頻率。越高越多張。</span>
+      </div>
+
+      <div class="row">
+        <label for="format">格式</label>
+        <select id="format">
+          <option value="image/jpeg">JPEG</option>
+          <option value="image/png">PNG</option>
+        </select>
+        <label for="quality">品質</label>
+        <input id="quality" type="number" min="0.1" max="1" step="0.1" value="0.9" />
+        <span class="hint">PNG 沒有品質參數。</span>
+      </div>
+
+      <div class="row">
+        <label for="scale">縮放</label>
+        <input id="scale" type="number" min="0.1" max="2" step="0.1" value="1" />
+        <span class="hint">相對原影片尺寸，例如 0.5 為寬高各縮半。</span>
+      </div>
+
+      <div class="row">
+        <label for="start">起始秒</label>
+        <input id="start" type="number" min="0" step="0.1" value="0" />
+        <label for="end">結束秒（0 代表影片尾）</label>
+        <input id="end" type="number" min="0" step="0.1" value="0" />
+      </div>
+
+      <div class="row">
+        <button id="extractBtn" disabled>開始擷取</button>
+        <button id="cancelBtn" disabled>取消</button>
+        <span class="hint mini">過程全在本機，隱私安全。</span>
+      </div>
+
+      <progress id="prog" value="0" max="100" hidden></progress>
+      <div id="status" class="mono hint"></div>
+
+      <div class="thumbs" id="thumbs" hidden></div>
+
+      <video id="v" preload="metadata" hidden></video>
+      <canvas id="c" hidden></canvas>
+    </section>
+
+    <section class="card mini">
+      <strong>部署提示</strong>
+      <ol>
+        <li>把這個檔案命名為 <code>index.html</code> 推上 GitHub Repo。</li>
+        <li>在 Repo 設定中開啟 GitHub Pages，Source 選擇 <em>main</em> 分支。</li>
+        <li>幾十秒後用 Pages 網址打開即可使用。</li>
+      </ol>
+      <div class="hint">若要自訂網域，於 DNS 加 CNAME 指到 <code>你的使用者名.github.io</code>。</div>
+    </section>
+  </main>
+  <footer>Made with ❤️ for client‑side video magic • 無伺服器、低維護</footer>
+
+  <!-- 依賴：JSZip + FileSaver（從 CDN 載入）-->
+  <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+
+  <script>
+  const fileInput = document.getElementById('videoFile');
+  const dropzone = document.getElementById('dropzone');
+  const extractBtn = document.getElementById('extractBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+  const prog = document.getElementById('prog');
+  const statusEl = document.getElementById('status');
+  const info = document.getElementById('info');
+  const thumbs = document.getElementById('thumbs');
+
+  const v = document.getElementById('v');
+  const c = document.getElementById('c');
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+
+  let currentFile = null;
+  let abort = false;
+
+  // 拖放
+  ;['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e=>{e.preventDefault(); dropzone.classList.add('drag')}));
+  ;['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, e=>{e.preventDefault(); dropzone.classList.remove('drag')}));
+  dropzone.addEventListener('drop', e => {
+    const f = e.dataTransfer.files?.[0];
+    if (f) loadFile(f);
+  });
+
+  fileInput.addEventListener('change', e => {
+    const f = e.target.files?.[0];
+    if (f) loadFile(f);
+  });
+
+  function humanBytes(bytes){
+    const u=['B','KB','MB','GB'];
+    let i=0, n=bytes;
+    while(n>1024 && i<u.length-1){n/=1024; i++}
+    return n.toFixed(1)+u[i]
+  }
+
+  function loadFile(file){
+    currentFile = file;
+    const url = URL.createObjectURL(file);
+    v.src = url;
+    v.onloadedmetadata = ()=>{
+      info.textContent = `${file.name} ｜ ${(v.videoWidth||0)}x${(v.videoHeight||0)} ｜ ${(v.duration||0).toFixed(2)}s ｜ ${humanBytes(file.size)}`;
+      extractBtn.disabled = false;
+      statusEl.textContent = '';
+      thumbs.replaceChildren();
+      thumbs.hidden = true;
+    };
+    v.onerror = ()=>{
+      extractBtn.disabled = true; info.textContent = '讀取失敗，格式可能不被瀏覽器支援';
+    }
+  }
+
+  cancelBtn.addEventListener('click', ()=>{ abort = true; statusEl.textContent = '已取消'; });
+
+  extractBtn.addEventListener('click', async ()=>{
+    if(!currentFile) return;
+    abort = false;
+    extractBtn.disabled = true; cancelBtn.disabled = false;
+
+    const fps = Math.max(1, Math.min(60, Number(document.getElementById('fps').value)||5));
+    const fmt = document.getElementById('format').value;
+    const quality = Number(document.getElementById('quality').value)||0.92;
+    const scale = Math.max(0.1, Math.min(2, Number(document.getElementById('scale').value)||1));
+    const start = Math.max(0, Number(document.getElementById('start').value)||0);
+    const endInput = Math.max(0, Number(document.getElementById('end').value)||0);
+
+    const end = endInput>0 ? Math.min(endInput, v.duration||0) : (v.duration||0);
+    if (start >= end) { statusEl.textContent = '起訖秒數不合法'; resetButtons(); return; }
+
+    const vw = Math.floor((v.videoWidth||1920) * scale);
+    const vh = Math.floor((v.videoHeight||1080) * scale);
+    c.width = vw; c.height = vh;
+
+    const dt = 1 / fps;
+    const totalFrames = Math.floor((end - start) * fps);
+
+    const zip = new JSZip();
+    const folder = zip.folder((currentFile.name.replace(/\.[^.]+$/, '')) + `_frames_${fps}fps`);
+
+    prog.hidden = false; prog.value = 0; prog.max = totalFrames || 1;
+    statusEl.textContent = `擷取中… 0 / ${totalFrames}`;
+    thumbs.hidden = false; thumbs.replaceChildren();
+
+    // 先 seek 到 start
+    await seekTo(start);
+
+    let frameIdx = 0;
+
+    const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+
+    if (useRVFC) {
+      // 高精度逐幀（支援的瀏覽器：Chrome/Edge/Opera 等）
+      let done = false;
+      const handle = async (now, meta) => {
+        if (abort || (v.currentTime > end)) { done = true; return; }
+        if (meta.mediaTime + 1e-4 < start) { v.requestVideoFrameCallback(handle); return; }
+        if (meta.mediaTime - 1e-4 > end) { done = true; return; }
+        await drawAndSave();
+        frameIdx++;
+        prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
+        if (!abort) v.requestVideoFrameCallback(handle);
+      };
+      v.requestVideoFrameCallback(handle);
+      v.play();
+      await until(()=> abort || v.ended || v.currentTime>=end || prog.value>=totalFrames);
+      v.pause();
+    } else {
+      // 退而求其次：以時間步進 seek（較慢但通用）
+      for (let t = start; t <= end + 1e-4; t += dt) {
+        if (abort) break;
+        await seekTo(t);
+        await drawAndSave();
+        frameIdx++;
+        prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
+      }
+    }
+
+    if (abort) { resetButtons(); return; }
+
+    statusEl.textContent = '正在壓縮 ZIP…';
+    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+
+    const outName = (currentFile.name.replace(/\.[^.]+$/, '')) + `_frames_${fps}fps.zip`;
+    saveAs(blob, outName);
+
+    statusEl.textContent = `完成！共 ${prog.value} 張，已下載 ZIP：${outName}`;
+    resetButtons();
+
+    async function drawAndSave(){
+      ctx.drawImage(v, 0, 0, c.width, c.height);
+      const blob = await new Promise(res=> c.toBlob(res, fmt, fmt==='image/jpeg'?quality:undefined));
+      const fname = `${String(frameIdx).padStart(6,'0')}${fmt==='image/png'?'.png':'.jpg'}`;
+      folder.file(fname, blob);
+      // 產生縮圖
+      const url = URL.createObjectURL(blob);
+      const img = new Image(); img.src = url; img.loading = 'lazy';
+      const el = document.createElement('img'); el.src = url; el.alt = fname; el.title = fname;
+      thumbs.appendChild(el);
+    }
+
+    function resetButtons(){
+      extractBtn.disabled = !currentFile; cancelBtn.disabled = true; prog.hidden = true;
+    }
+  });
+
+  async function seekTo(t){
+    return new Promise((res, rej)=>{
+      const onSeeked = ()=>{ v.removeEventListener('seeked', onSeeked); res(); };
+      v.addEventListener('seeked', onSeeked, { once: true });
+      try { v.currentTime = Math.min(Math.max(0, t), v.duration || t); }
+      catch(e){ rej(e); }
+    });
+  }
+
+  function until(cond){
+    return new Promise(resolve=>{
+      const id = setInterval(()=>{ if (cond()) { clearInterval(id); resolve(); } }, 60);
+    });
+  }
+  </script>
+</body>
+</html>
