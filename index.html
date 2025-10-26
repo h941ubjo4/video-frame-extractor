@@ -121,14 +121,12 @@
   ;['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, e=>{e.preventDefault(); dropzone.classList.remove('drag')}));
   dropzone.addEventListener('drop', e => {
     const f = e.dataTransfer.files?.[0];
-    if (f) loadFile(f, true); // 拖曳後自動擷取
-  });
+    if (f) loadFile(f, false); // 拖曳後不自動擷取，等使用者按開始
   });
 
   fileInput.addEventListener('change', e => {
     const f = e.target.files?.[0];
-    if (f) loadFile(f, true); // 選檔後自動擷取
-  });
+    if (f) loadFile(f, false); // 選檔後不自動擷取，等使用者按開始
   });
 
   function humanBytes(bytes){
@@ -139,7 +137,7 @@
   }
 
   let pendingAutoStart = false;
-  function loadFile(file, autoStart = true){
+  function loadFile(file, autoStart = false){
     pendingAutoStart = !!autoStart;
     currentFile = file;
     const url = URL.createObjectURL(file);
@@ -151,7 +149,7 @@
       statusEl.textContent = '';
       thumbs.replaceChildren();
       thumbs.hidden = true;
-      if (pendingAutoStart) { pendingAutoStart = false; startExtract(); }
+      if (pendingAutoStart) { pendingAutoStart = false; startExtract(); } // 預設不自動，除非明確指定
     };
     v.onerror = ()=>{
       extractBtn.disabled = true; info.textContent = '讀取失敗，格式可能不被瀏覽器支援';
