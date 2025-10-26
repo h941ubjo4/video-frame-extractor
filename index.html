@@ -87,13 +87,13 @@
 
       <div class="thumbs" id="thumbs" hidden></div>
 
-      <video id="v" preload="metadata" hidden></video>
+      <video id="v" preload="metadata" hidden playsinline webkit-playsinline muted disablePictureInPicture controlslist="nodownload noplaybackrate noremoteplayback"></video>
       <canvas id="c" hidden></canvas>
     </section>
 
     
   </main>
-  <footer> video-frame-extractor </footer>
+  <footer>影片逐幀擷取器｜Video Frame Extractor</footer>
 
   <!-- 依賴：JSZip + FileSaver（從 CDN 載入）-->
   <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
@@ -141,6 +141,8 @@
     const url = URL.createObjectURL(file);
     v.src = url;
     v.onloadedmetadata = ()=>{
+      // 確保任何平台都不會觸發可見播放或跳全螢幕
+      v.muted = true; v.playsInline = true; v.disablePictureInPicture = true; v.controls = false;
       info.textContent = `${file.name} ｜ ${(v.videoWidth||0)}x${(v.videoHeight||0)} ｜ ${(v.duration||0).toFixed(2)}s ｜ ${humanBytes(file.size)}`;
       extractBtn.disabled = false;
       statusEl.textContent = '';
@@ -188,33 +190,13 @@
 
     let frameIdx = 0;
 
-    const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
-
-    if (useRVFC) {
-      // 高精度逐幀（支援的瀏覽器：Chrome/Edge/Opera 等）
-      let done = false;
-      const handle = async (now, meta) => {
-        if (abort || (v.currentTime > end)) { done = true; return; }
-        if (meta.mediaTime + 1e-4 < start) { v.requestVideoFrameCallback(handle); return; }
-        if (meta.mediaTime - 1e-4 > end) { done = true; return; }
-        await drawAndSave();
-        frameIdx++;
-        prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
-        if (!abort) v.requestVideoFrameCallback(handle);
-      };
-      v.requestVideoFrameCallback(handle);
-      v.play();
-      await until(()=> abort || v.ended || v.currentTime>=end || prog.value>=totalFrames);
-      v.pause();
-    } else {
-      // 退而求其次：以時間步進 seek（較慢但通用）
-      for (let t = start; t <= end + 1e-4; t += dt) {
-        if (abort) break;
-        await seekTo(t);
-        await drawAndSave();
-        frameIdx++;
-        prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
-      }
+    // 使用時間步進 seek，不觸發播放
+    for (let t = start; t <= end + 1e-4; t += dt) {
+      if (abort) break;
+      await seekTo(t);
+      await drawAndSave();
+      frameIdx++;
+      prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
     }
 
     if (abort) { resetButtons(); return; }
@@ -262,6 +244,3 @@
   </script>
 </body>
 </html>
-
-
-
