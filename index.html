@@ -116,6 +116,9 @@
   let currentFile = null;
   let abort = false;
 
+  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+  const isIOS = /iP(hone|od|ad)/.test(navigator.platform) || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+
   // 拖放
   ;['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e=>{e.preventDefault(); dropzone.classList.add('drag')}));
   ;['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, e=>{e.preventDefault(); dropzone.classList.remove('drag')}));
@@ -136,12 +139,37 @@
     return n.toFixed(1)+u[i]
   }
 
+  async function ensureReady(){
+    if (v.readyState >= 1 && v.duration) return;
+    await new Promise((resolve)=>{
+      const to = setTimeout(async ()=>{
+        try { v.muted = true; await v.play(); setTimeout(()=>{ v.pause(); resolve(); }, 80); }
+        catch(e){ resolve(); }
+      }, 800);
+      const onMeta = ()=>{ clearTimeout(to); v.removeEventListener('loadedmetadata', onMeta); resolve(); };
+      const onErr = ()=>{ clearTimeout(to); v.removeEventListener('error', onErr); resolve(); };
+      v.addEventListener('loadedmetadata', onMeta, { once:true });
+      v.addEventListener('error', onErr, { once:true });
+    });
+  }
+    return n.toFixed(1)+u[i]
+  }
+
   let pendingAutoStart = false;
   function loadFile(file, autoStart = false){
     pendingAutoStart = !!autoStart;
     currentFile = file;
+
+    if (isSafari && /webm/i.test(file.type)) {
+      statusEl.textContent = '提示：Safari 對 WebM 支援有限，可能無法載入。建議使用 MP4/MOV (H.264/HEVC)。';
+    } else {
+      statusEl.textContent = '正在載入影片中…';
+    }
+
     const url = URL.createObjectURL(file);
     v.src = url;
+    try { v.load(); } catch(e) {}
+
     v.onloadedmetadata = ()=>{
       v.muted = true; v.playsInline = true; v.disablePictureInPicture = true; v.controls = false;
       info.textContent = `${file.name} ｜ ${(v.videoWidth||0)}x${(v.videoHeight||0)} ｜ ${(v.duration||0).toFixed(2)}s ｜ ${humanBytes(file.size)}`;
@@ -149,8 +177,13 @@
       statusEl.textContent = '';
       thumbs.replaceChildren();
       thumbs.hidden = true;
-      if (pendingAutoStart) { pendingAutoStart = false; startExtract(); } // 預設不自動，除非明確指定
+      if (pendingAutoStart) { pendingAutoStart = false; startExtract(); }
     };
+    v.onerror = ()=>{
+      extractBtn.disabled = true; info.textContent = '讀取失敗，格式可能不被瀏覽器支援';
+      statusEl.textContent = '無法載入影片。請改用 MP4/MOV，或在桌機 Chrome 測試。';
+    }
+  };
     v.onerror = ()=>{
       extractBtn.disabled = true; info.textContent = '讀取失敗，格式可能不被瀏覽器支援';
     }
@@ -162,6 +195,8 @@
     if(!currentFile) return;
     abort = false;
     extractBtn.disabled = true; cancelBtn.disabled = false;
+
+    await ensureReady();
 
     const fps = Math.max(1, Math.min(60, Number(document.getElementById('fps').value)||5));
     const fmt = document.getElementById('format').value;
