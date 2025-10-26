@@ -87,7 +87,7 @@
 
       <div class="thumbs" id="thumbs" hidden></div>
 
-      <video id="v" preload="metadata" hidden playsinline webkit-playsinline muted disablePictureInPicture controlslist="nodownload noplaybackrate noremoteplayback"></video>
+      <video id="v" preload="metadata" playsinline webkit-playsinline muted disablePictureInPicture controlslist="nodownload noplaybackrate noremoteplayback" style="position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0;pointer-events:none"></video>
       <canvas id="c" hidden></canvas>
     </section>
 
@@ -121,12 +121,14 @@
   ;['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, e=>{e.preventDefault(); dropzone.classList.remove('drag')}));
   dropzone.addEventListener('drop', e => {
     const f = e.dataTransfer.files?.[0];
-    if (f) loadFile(f);
+    if (f) loadFile(f, true); // 拖曳後自動擷取
+  });
   });
 
   fileInput.addEventListener('change', e => {
     const f = e.target.files?.[0];
-    if (f) loadFile(f);
+    if (f) loadFile(f, true); // 選檔後自動擷取
+  });
   });
 
   function humanBytes(bytes){
@@ -136,18 +138,20 @@
     return n.toFixed(1)+u[i]
   }
 
-  function loadFile(file){
+  let pendingAutoStart = false;
+  function loadFile(file, autoStart = true){
+    pendingAutoStart = !!autoStart;
     currentFile = file;
     const url = URL.createObjectURL(file);
     v.src = url;
     v.onloadedmetadata = ()=>{
-      // 確保任何平台都不會觸發可見播放或跳全螢幕
       v.muted = true; v.playsInline = true; v.disablePictureInPicture = true; v.controls = false;
       info.textContent = `${file.name} ｜ ${(v.videoWidth||0)}x${(v.videoHeight||0)} ｜ ${(v.duration||0).toFixed(2)}s ｜ ${humanBytes(file.size)}`;
       extractBtn.disabled = false;
       statusEl.textContent = '';
       thumbs.replaceChildren();
       thumbs.hidden = true;
+      if (pendingAutoStart) { pendingAutoStart = false; startExtract(); }
     };
     v.onerror = ()=>{
       extractBtn.disabled = true; info.textContent = '讀取失敗，格式可能不被瀏覽器支援';
@@ -156,7 +160,7 @@
 
   cancelBtn.addEventListener('click', ()=>{ abort = true; statusEl.textContent = '已取消'; });
 
-  extractBtn.addEventListener('click', async ()=>{
+  async function startExtract(){
     if(!currentFile) return;
     abort = false;
     extractBtn.disabled = true; cancelBtn.disabled = false;
@@ -185,18 +189,34 @@
     statusEl.textContent = `擷取中… 0 / ${totalFrames}`;
     thumbs.hidden = false; thumbs.replaceChildren();
 
-    // 先 seek 到 start
     await seekTo(start);
-
     let frameIdx = 0;
 
-    // 使用時間步進 seek，不觸發播放
-    for (let t = start; t <= end + 1e-4; t += dt) {
-      if (abort) break;
-      await seekTo(t);
-      await drawAndSave();
-      frameIdx++;
-      prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
+    const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+
+    if (useRVFC) {
+      try { await v.play(); } catch(e) {}
+      const handle = async (now, meta) => {
+        if (abort || (v.currentTime > end)) { return; }
+        if (meta.mediaTime + 1e-4 < start) { v.requestVideoFrameCallback(handle); return; }
+        if (meta.mediaTime - 1e-4 > end) { return; }
+        await drawAndSave();
+        frameIdx++;
+        prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
+        if (!abort && v.currentTime <= end) v.requestVideoFrameCallback(handle);
+      };
+      v.currentTime = start;
+      v.requestVideoFrameCallback(handle);
+      await until(()=> abort || v.ended || v.currentTime>=end || prog.value>=totalFrames);
+      v.pause();
+    } else {
+      for (let t = start; t <= end + 1e-4; t += dt) {
+        if (abort) break;
+        await seekTo(t);
+        await drawAndSave();
+        frameIdx++;
+        prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
+      }
     }
 
     if (abort) { resetButtons(); return; }
@@ -215,7 +235,6 @@
       const blob = await new Promise(res=> c.toBlob(res, fmt, fmt==='image/jpeg'?quality:undefined));
       const fname = `${String(frameIdx).padStart(6,'0')}${fmt==='image/png'?'.png':'.jpg'}`;
       folder.file(fname, blob);
-      // 產生縮圖
       const url = URL.createObjectURL(blob);
       const img = new Image(); img.src = url; img.loading = 'lazy';
       const el = document.createElement('img'); el.src = url; el.alt = fname; el.title = fname;
@@ -225,7 +244,9 @@
     function resetButtons(){
       extractBtn.disabled = !currentFile; cancelBtn.disabled = true; prog.hidden = true;
     }
-  });
+  }
+
+  extractBtn.addEventListener('click', startExtract);
 
   async function seekTo(t){
     return new Promise((res, rej)=>{
