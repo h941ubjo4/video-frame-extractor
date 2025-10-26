@@ -40,7 +40,7 @@
     <section class="card grid">
       <div class="row">
         <label for="videoFile">選擇影片</label>
-        <input id="videoFile" type="file" accept="video/*" />
+        <input id="videoFile" type="file" accept="video/mp4,video/quicktime,video/*" />
         <span class="badge" id="info">未載入</span>
       </div>
 
@@ -100,201 +100,195 @@
   <script src="https://unpkg.com/file-saver@2.0.5/dist/FileSaver.min.js"></script>
 
   <script>
-  const fileInput = document.getElementById('videoFile');
-  const dropzone = document.getElementById('dropzone');
-  const extractBtn = document.getElementById('extractBtn');
-  const cancelBtn = document.getElementById('cancelBtn');
-  const prog = document.getElementById('prog');
-  const statusEl = document.getElementById('status');
-  const info = document.getElementById('info');
-  const thumbs = document.getElementById('thumbs');
+// === Video Frame Extractor — Safari Clean Build ===
+const fileInput = document.getElementById('videoFile');
+const dropzone  = document.getElementById('dropzone');
+const extractBtn= document.getElementById('extractBtn');
+const cancelBtn = document.getElementById('cancelBtn');
+const prog      = document.getElementById('prog');
+const statusEl  = document.getElementById('status');
+const info      = document.getElementById('info');
+const thumbs    = document.getElementById('thumbs');
 
-  const v = document.getElementById('v');
-  const c = document.getElementById('c');
-  const ctx = c.getContext('2d', { willReadFrequently: true });
+const v  = document.getElementById('v');
+const c  = document.getElementById('c');
+const ctx = c.getContext('2d', { willReadFrequently: true });
 
-  let currentFile = null;
-  let abort = false;
+let currentFile = null;
+let abort = false;
+let pendingAutoStart = false;
 
-  const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
-  const isIOS = /iP(hone|od|ad)/.test(navigator.platform) || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+const isSafari = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
 
-  // 拖放
-  ;['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e=>{e.preventDefault(); dropzone.classList.add('drag')}));
-  ;['dragleave','drop'].forEach(evt => dropzone.addEventListener(evt, e=>{e.preventDefault(); dropzone.classList.remove('drag')}));
-  dropzone.addEventListener('drop', e => {
-    const f = e.dataTransfer.files?.[0];
-    if (f) loadFile(f, false); // 拖曳後不自動擷取，等使用者按開始
+// Drag & drop UX
+['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, e=>{ e.preventDefault(); dropzone.classList.add('drag'); }));
+['dragleave','drop'   ].forEach(evt => dropzone.addEventListener(evt, e=>{ e.preventDefault(); dropzone.classList.remove('drag'); }));
+dropzone.addEventListener('drop', e => {
+  const f = e.dataTransfer.files?.[0];
+  if (f) loadFile(f, false); // 手動按開始
+});
+
+fileInput.addEventListener('change', e => {
+  const f = e.target.files?.[0];
+  if (f) loadFile(f, false); // 手動按開始
+});
+
+function humanBytes(bytes){
+  const u=['B','KB','MB','GB'];
+  let i=0, n=bytes;
+  while(n>1024 && i<u.length-1){ n/=1024; i++; }
+  return n.toFixed(1)+u[i];
+}
+
+// 確保 Safari 載入 metadata；若卡住，做一次靜音短播 → 立刻暫停
+async function ensureReady(){
+  if (v.readyState >= 1 && v.duration) return;
+  await new Promise(resolve => {
+    const to = setTimeout(async () => {
+      try { v.muted = true; await v.play(); setTimeout(()=>{ v.pause(); resolve(); }, 80); }
+      catch(_) { resolve(); }
+    }, 800);
+    const onMeta = () => { clearTimeout(to); v.removeEventListener('loadedmetadata', onMeta); resolve(); };
+    const onErr  = () => { clearTimeout(to); v.removeEventListener('error', onErr); resolve(); };
+    v.addEventListener('loadedmetadata', onMeta, { once:true });
+    v.addEventListener('error', onErr, { once:true });
   });
+}
 
-  fileInput.addEventListener('change', e => {
-    const f = e.target.files?.[0];
-    if (f) loadFile(f, false); // 選檔後不自動擷取，等使用者按開始
-  });
+function loadFile(file, autoStart=false){
+  pendingAutoStart = !!autoStart;
+  currentFile = file;
 
-  function humanBytes(bytes){
-    const u=['B','KB','MB','GB'];
-    let i=0, n=bytes;
-    while(n>1024 && i<u.length-1){n/=1024; i++}
-    return n.toFixed(1)+u[i]
+  // Safari 對 WebM 支援差，先提示
+  if (isSafari && /webm/i.test(file.type)) {
+    statusEl.textContent = '提醒：Safari 對 WebM 支援有限，建議使用 MP4 或 MOV (H.264/HEVC)。';
+  } else {
+    statusEl.textContent = '正在載入影片中…';
   }
 
-  async function ensureReady(){
-    if (v.readyState >= 1 && v.duration) return;
-    await new Promise((resolve)=>{
-      const to = setTimeout(async ()=>{
-        try { v.muted = true; await v.play(); setTimeout(()=>{ v.pause(); resolve(); }, 80); }
-        catch(e){ resolve(); }
-      }, 800);
-      const onMeta = ()=>{ clearTimeout(to); v.removeEventListener('loadedmetadata', onMeta); resolve(); };
-      const onErr = ()=>{ clearTimeout(to); v.removeEventListener('error', onErr); resolve(); };
-      v.addEventListener('loadedmetadata', onMeta, { once:true });
-      v.addEventListener('error', onErr, { once:true });
-    });
-  }
-    return n.toFixed(1)+u[i]
-  }
+  const url = URL.createObjectURL(file);
+  v.src = url;
+  try { v.load(); } catch(_){ }
 
-  let pendingAutoStart = false;
-  function loadFile(file, autoStart = false){
-    pendingAutoStart = !!autoStart;
-    currentFile = file;
-
-    if (isSafari && /webm/i.test(file.type)) {
-      statusEl.textContent = '提示：Safari 對 WebM 支援有限，可能無法載入。建議使用 MP4/MOV (H.264/HEVC)。';
-    } else {
-      statusEl.textContent = '正在載入影片中…';
-    }
-
-    const url = URL.createObjectURL(file);
-    v.src = url;
-    try { v.load(); } catch(e) {}
-
-    v.onloadedmetadata = ()=>{
-      v.muted = true; v.playsInline = true; v.disablePictureInPicture = true; v.controls = false;
-      info.textContent = `${file.name} ｜ ${(v.videoWidth||0)}x${(v.videoHeight||0)} ｜ ${(v.duration||0).toFixed(2)}s ｜ ${humanBytes(file.size)}`;
-      extractBtn.disabled = false;
-      statusEl.textContent = '';
-      thumbs.replaceChildren();
-      thumbs.hidden = true;
-      if (pendingAutoStart) { pendingAutoStart = false; startExtract(); }
-    };
-    v.onerror = ()=>{
-      extractBtn.disabled = true; info.textContent = '讀取失敗，格式可能不被瀏覽器支援';
-      statusEl.textContent = '無法載入影片。請改用 MP4/MOV，或在桌機 Chrome 測試。';
-    }
+  v.onloadedmetadata = () => {
+    v.muted = true; v.playsInline = true; v.disablePictureInPicture = true; v.controls = false;
+    info.textContent = `${file.name} ｜ ${(v.videoWidth||0)}x${(v.videoHeight||0)} ｜ ${(v.duration||0).toFixed(2)}s ｜ ${humanBytes(file.size)}`;
+    extractBtn.disabled = false;
+    statusEl.textContent = '';
+    thumbs.replaceChildren();
+    thumbs.hidden = true;
+    if (pendingAutoStart) { pendingAutoStart = false; startExtract(); }
   };
-    v.onerror = ()=>{
-      extractBtn.disabled = true; info.textContent = '讀取失敗，格式可能不被瀏覽器支援';
+
+  v.onerror = () => {
+    extractBtn.disabled = true;
+    info.textContent = '讀取失敗';
+    statusEl.textContent = '無法載入影片。請改用 MP4/MOV，或在桌機 Chrome 測試。';
+  };
+}
+
+cancelBtn.addEventListener('click', () => { abort = true; statusEl.textContent = '已取消'; });
+extractBtn.addEventListener('click', startExtract);
+
+async function startExtract(){
+  if (!currentFile) return;
+  abort = false;
+  extractBtn.disabled = true; cancelBtn.disabled = false;
+
+  await ensureReady();
+
+  const fps     = Math.max(1, Math.min(60, Number(document.getElementById('fps').value)||5));
+  const fmt     = document.getElementById('format').value;
+  const quality = Number(document.getElementById('quality').value)||0.92;
+  const scale   = Math.max(0.1, Math.min(2, Number(document.getElementById('scale').value)||1));
+  const start   = Math.max(0, Number(document.getElementById('start').value)||0);
+  const endInput= Math.max(0, Number(document.getElementById('end').value)||0);
+
+  const end = endInput>0 ? Math.min(endInput, v.duration||0) : (v.duration||0);
+  if (start >= end) { statusEl.textContent = '起訖秒數不合法'; resetButtons(); return; }
+
+  const vw = Math.floor((v.videoWidth||1920) * scale);
+  const vh = Math.floor((v.videoHeight||1080) * scale);
+  c.width = vw; c.height = vh;
+
+  const dt = 1 / fps;
+  const totalFrames = Math.floor((end - start) * fps);
+
+  const zip = new JSZip();
+  const folder = zip.folder((currentFile.name.replace(/\.[^.]+$/, '')) + `_frames_${fps}fps`);
+
+  prog.hidden = false; prog.value = 0; prog.max = totalFrames || 1;
+  statusEl.textContent = `擷取中… 0 / ${totalFrames}`;
+  thumbs.hidden = false; thumbs.replaceChildren();
+
+  await seekTo(start);
+  let frameIdx = 0;
+
+  const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  if (useRVFC) {
+    try { await v.play(); } catch(_) {}
+    const handle = async (_now, meta) => {
+      if (abort || (v.currentTime > end)) { return; }
+      if (meta.mediaTime + 1e-4 < start) { v.requestVideoFrameCallback(handle); return; }
+      if (meta.mediaTime - 1e-4 > end)   { return; }
+      await drawAndSave();
+      frameIdx++;
+      prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
+      if (!abort && v.currentTime <= end) v.requestVideoFrameCallback(handle);
+    };
+    v.currentTime = start;
+    v.requestVideoFrameCallback(handle);
+    await until(()=> abort || v.ended || v.currentTime>=end || prog.value>=totalFrames);
+    v.pause();
+  } else {
+    for (let t = start; t <= end + 1e-4; t += dt) {
+      if (abort) break;
+      await seekTo(t);
+      await drawAndSave();
+      frameIdx++;
+      prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
     }
   }
 
-  cancelBtn.addEventListener('click', ()=>{ abort = true; statusEl.textContent = '已取消'; });
+  if (abort) { resetButtons(); return; }
 
-  async function startExtract(){
-    if(!currentFile) return;
-    abort = false;
-    extractBtn.disabled = true; cancelBtn.disabled = false;
+  statusEl.textContent = '正在壓縮 ZIP…';
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  const outName = (currentFile.name.replace(/\.[^.]+$/, '')) + `_frames_${fps}fps.zip`;
+  saveAs(blob, outName);
+  statusEl.textContent = `完成！共 ${prog.value} 張，已下載 ZIP：${outName}`;
+  resetButtons();
 
-    await ensureReady();
-
-    const fps = Math.max(1, Math.min(60, Number(document.getElementById('fps').value)||5));
-    const fmt = document.getElementById('format').value;
-    const quality = Number(document.getElementById('quality').value)||0.92;
-    const scale = Math.max(0.1, Math.min(2, Number(document.getElementById('scale').value)||1));
-    const start = Math.max(0, Number(document.getElementById('start').value)||0);
-    const endInput = Math.max(0, Number(document.getElementById('end').value)||0);
-
-    const end = endInput>0 ? Math.min(endInput, v.duration||0) : (v.duration||0);
-    if (start >= end) { statusEl.textContent = '起訖秒數不合法'; resetButtons(); return; }
-
-    const vw = Math.floor((v.videoWidth||1920) * scale);
-    const vh = Math.floor((v.videoHeight||1080) * scale);
-    c.width = vw; c.height = vh;
-
-    const dt = 1 / fps;
-    const totalFrames = Math.floor((end - start) * fps);
-
-    const zip = new JSZip();
-    const folder = zip.folder((currentFile.name.replace(/\.[^.]+$/, '')) + `_frames_${fps}fps`);
-
-    prog.hidden = false; prog.value = 0; prog.max = totalFrames || 1;
-    statusEl.textContent = `擷取中… 0 / ${totalFrames}`;
-    thumbs.hidden = false; thumbs.replaceChildren();
-
-    await seekTo(start);
-    let frameIdx = 0;
-
-    const useRVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
-
-    if (useRVFC) {
-      try { await v.play(); } catch(e) {}
-      const handle = async (now, meta) => {
-        if (abort || (v.currentTime > end)) { return; }
-        if (meta.mediaTime + 1e-4 < start) { v.requestVideoFrameCallback(handle); return; }
-        if (meta.mediaTime - 1e-4 > end) { return; }
-        await drawAndSave();
-        frameIdx++;
-        prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
-        if (!abort && v.currentTime <= end) v.requestVideoFrameCallback(handle);
-      };
-      v.currentTime = start;
-      v.requestVideoFrameCallback(handle);
-      await until(()=> abort || v.ended || v.currentTime>=end || prog.value>=totalFrames);
-      v.pause();
-    } else {
-      for (let t = start; t <= end + 1e-4; t += dt) {
-        if (abort) break;
-        await seekTo(t);
-        await drawAndSave();
-        frameIdx++;
-        prog.value = frameIdx; statusEl.textContent = `擷取中… ${frameIdx} / ${totalFrames}`;
-      }
-    }
-
-    if (abort) { resetButtons(); return; }
-
-    statusEl.textContent = '正在壓縮 ZIP…';
-    const blob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
-
-    const outName = (currentFile.name.replace(/\.[^.]+$/, '')) + `_frames_${fps}fps.zip`;
-    saveAs(blob, outName);
-
-    statusEl.textContent = `完成！共 ${prog.value} 張，已下載 ZIP：${outName}`;
-    resetButtons();
-
-    async function drawAndSave(){
-      ctx.drawImage(v, 0, 0, c.width, c.height);
-      const blob = await new Promise(res=> c.toBlob(res, fmt, fmt==='image/jpeg'?quality:undefined));
-      const fname = `${String(frameIdx).padStart(6,'0')}${fmt==='image/png'?'.png':'.jpg'}`;
-      folder.file(fname, blob);
-      const url = URL.createObjectURL(blob);
-      const img = new Image(); img.src = url; img.loading = 'lazy';
-      const el = document.createElement('img'); el.src = url; el.alt = fname; el.title = fname;
-      thumbs.appendChild(el);
-    }
-
-    function resetButtons(){
-      extractBtn.disabled = !currentFile; cancelBtn.disabled = true; prog.hidden = true;
-    }
+  async function drawAndSave(){
+    ctx.drawImage(v, 0, 0, c.width, c.height);
+    const blob = await new Promise(res=> c.toBlob(res, fmt, fmt==='image/jpeg'?quality:undefined));
+    const fname = `${String(frameIdx).padStart(6,'0')}${fmt==='image/png'?'.png':'.jpg'}`;
+    folder.file(fname, blob);
+    const url = URL.createObjectURL(blob);
+    const img = new Image(); img.src = url; img.loading = 'lazy';
+    const el = document.createElement('img'); el.src = url; el.alt = fname; el.title = fname;
+    thumbs.appendChild(el);
   }
 
-  extractBtn.addEventListener('click', startExtract);
-
-  async function seekTo(t){
-    return new Promise((res, rej)=>{
-      const onSeeked = ()=>{ v.removeEventListener('seeked', onSeeked); res(); };
-      v.addEventListener('seeked', onSeeked, { once: true });
-      try { v.currentTime = Math.min(Math.max(0, t), v.duration || t); }
-      catch(e){ rej(e); }
-    });
+  function resetButtons(){
+    extractBtn.disabled = !currentFile; cancelBtn.disabled = true; prog.hidden = true;
   }
+}
 
-  function until(cond){
-    return new Promise(resolve=>{
-      const id = setInterval(()=>{ if (cond()) { clearInterval(id); resolve(); } }, 60);
-    });
-  }
-  </script>
+async function seekTo(t){
+  return new Promise((res, rej)=>{
+    const onSeeked = ()=>{ v.removeEventListener('seeked', onSeeked); res(); };
+    v.addEventListener('seeked', onSeeked, { once: true });
+    try { v.currentTime = Math.min(Math.max(0, t), v.duration || t); }
+    catch(e){ rej(e); }
+  });
+}
+
+function until(cond){
+  return new Promise(resolve=>{
+    const id = setInterval(()=>{ if (cond()) { clearInterval(id); resolve(); } }, 60);
+  });
+}
+</script>
 </body>
 </html>
